@@ -362,6 +362,7 @@ ScfbPreInit(ScrnInfoPtr pScrn, int flags)
 	const char *reqSym = NULL, *s;
 	Gamma zeros = {0.0, 0.0, 0.0};
 	DisplayModePtr mode;
+	struct fb_rgboffs offs;
 
 	if (flags & PROBE_DETECT) return FALSE;
 
@@ -412,6 +413,14 @@ ScfbPreInit(ScrnInfoPtr pScrn, int flags)
 		    fPtr->info.vi_pixel_size;
 	}
 
+	if (ioctl(fPtr->fd, FBIO_GETRGBOFFS, &offs) == -1) {
+		xf86DrvMsg(pScrn->scrnIndex, X_INFO,
+			   "ioctl FBIO_GETRGBOFFS fail: %s. "
+			   "Falling back to default color format.\n",
+			   strerror(errno));
+		memset(&offs, 0, sizeof(offs));
+	}
+
 	/* Handle depth */
 	default_depth = fPtr->info.vi_depth <= 24 ? fPtr->info.vi_depth : 24;
 	if (!xf86SetDepthBpp(pScrn, default_depth, default_depth,
@@ -436,6 +445,24 @@ ScfbPreInit(ScrnInfoPtr pScrn, int flags)
 	/* Color weight */
 	if (pScrn->depth > 8) {
 		rgb zeros = { 0, 0, 0 }, masks = { 0, 0, 0 };
+
+		/*
+		 * If FBIO_GETRGBOFFS returned any non-zero offset, set
+		 * the RGB masks appropriately.
+		 *
+		 * Due to a bug in Xorg server that causes it to calculate
+		 * the wrong offsets when masks are explicitly passed,
+		 * avoid modifying the masks if they correspond to the
+		 * default values used by X.
+		 * This issue was reported at
+		 * https://gitlab.freedesktop.org/xorg/xserver/-/issues/1112
+		 */
+		if ((offs.red != 0 || offs.green != 0 || offs.blue != 0) &&
+		    !(offs.red == 16 && offs.green == 8 && offs.blue == 0)) {
+			masks.red = 0xff << offs.red;
+			masks.green = 0xff << offs.green;
+			masks.blue = 0xff << offs.blue;
+		}
 
 		if (!xf86SetWeight(pScrn, zeros, masks))
 			return FALSE;
